@@ -3,6 +3,7 @@ version: "2.2"
 services:
   setup:
     image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    restart: unless-stopped
     container_name: ecp-elasticsearch-security-setup
     volumes:
       - certs:/usr/share/elasticsearch/config/certs:z
@@ -59,16 +60,23 @@ services:
         echo "All done!";
       '
     healthcheck:
-      test: ["CMD-SHELL", "[ -f config/certs/elasticsearch/elasticsearch.crt ]"]
+      test:
+        [
+          "CMD-SHELL",
+          "[ -f config/certs/elasticsearch/elasticsearch.crt ]"
+        ]
       interval: 1s
       timeout: 5s
       retries: 120
+    networks:
+      - elastic
 
   elasticsearch:
     depends_on:
       setup:
         condition: service_healthy
     image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    restart: unless-stopped
     container_name: ecp-elasticsearch
     volumes:
       - certs:/usr/share/elasticsearch/config/certs
@@ -104,17 +112,20 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -s --cacert config/certs/ca/ca.crt https://localhost:9200 | grep -q 'missing authentication credentials'",
+          "curl -s --cacert config/certs/ca/ca.crt https://localhost:9200 | grep -q 'missing authentication credentials'"
         ]
       interval: 10s
       timeout: 10s
       retries: 120
+    networks:
+      - elastic
 
   kibana:
     depends_on:
       elasticsearch:
         condition: service_healthy
     image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    restart: unless-stopped
     container_name: ecp-kibana
     volumes:
       - certs:/usr/share/kibana/config/certs:z
@@ -137,43 +148,76 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -I -s --cacert config/certs/ca/ca.crt https://localhost:5601 | grep -q 'HTTP/1.1 302 Found'",
+          "curl -I -s --cacert config/certs/ca/ca.crt https://localhost:5601 | grep -q 'HTTP/1.1 302 Found'"
         ]
       interval: 10s
       timeout: 10s
       retries: 120
+    networks:
+      - elastic
 
   fleet-server:
-      depends_on:
-        kibana:
-          condition: service_healthy
-        elasticsearch:
-          condition: service_healthy
-      image: docker.elastic.co/beats/elastic-agent:${STACK_VERSION}
-      container_name: ecp-fleet-server
-      volumes:
-        - certs:/certs:z
-      ports:
-        - ${FLEET_PORT}:8220
-      restart: always
-      user: root
-      environment:
-        - FLEET_ENROLL=1
-        - FLEET_SERVER_POLICY_ID=fleet-server-policy
-        - FLEET_SERVER_ENABLE=1
-        - KIBANA_FLEET_SETUP=1
-        - KIBANA_HOST=https://ecp-kibana:5601
-        - FLEET_URL=https://ecp-fleet-server:8220
-        - FLEET_SERVER_ELASTICSEARCH_HOST=https://ecp-elasticsearch:9200
-        - FLEET_CA=/certs/ca/ca.crt
-        - KIBANA_FLEET_USERNAME=elastic
-        - KIBANA_FLEET_PASSWORD=${ELASTIC_PASSWORD}
-        - FLEET_SERVER_CERT=/certs/fleet-server/fleet-server.crt
-        - FLEET_SERVER_CERT_KEY=/certs/fleet-server/fleet-server.key
-        - FLEET_SERVER_ELASTICSEARCH_CA=/certs/ca/ca.crt
-        - KIBANA_FLEET_CA=/certs/ca/ca.crt
+    depends_on:
+      kibana:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    image: docker.elastic.co/beats/elastic-agent:${STACK_VERSION}
+    restart: unless-stopped
+    container_name: ecp-fleet-server
+    volumes:
+      - certs:/certs:z
+    ports:
+      - ${FLEET_PORT}:8220
+    user: root
+    environment:
+      - FLEET_ENROLL=1
+      - FLEET_SERVER_POLICY_ID=fleet-server-policy
+      - FLEET_SERVER_ENABLE=1
+      - KIBANA_FLEET_SETUP=1
+      - KIBANA_HOST=https://ecp-kibana:5601
+      - FLEET_URL=https://ecp-fleet-server:8220
+      - FLEET_SERVER_ELASTICSEARCH_HOST=https://ecp-elasticsearch:9200
+      - FLEET_CA=/certs/ca/ca.crt
+      - KIBANA_FLEET_USERNAME=elastic
+      - KIBANA_FLEET_PASSWORD=${ELASTIC_PASSWORD}
+      - FLEET_SERVER_CERT=/certs/fleet-server/fleet-server.crt
+      - FLEET_SERVER_CERT_KEY=/certs/fleet-server/fleet-server.key
+      - FLEET_SERVER_ELASTICSEARCH_CA=/certs/ca/ca.crt
+      - KIBANA_FLEET_CA=/certs/ca/ca.crt
+    networks:
+      - elastic
+
+  nginx:
+    image: nginx:latest
+    restart: unless-stopped
+    container_name: nginx
+    ports:
+      - "80:80"
+    networks:
+      - elastic
+
+  portainer:
+    image: portainer/portainer-ce
+    restart: unless-stopped
+    ports:
+      - 9000:9000
+    environment:
+      - ADMIN_USER=${PORTAINER_USERNAME}
+      - ADMIN_PASS=${PORTAINER_PASSWORD}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    networks:
+      - elastic
+
+networks:
+  elastic:
+    driver: bridge
 
 volumes:
+  portainer_data:
+    driver: local
   certs:
     driver: local
   esdata01:
